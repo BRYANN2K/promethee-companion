@@ -1,12 +1,33 @@
-# Notch export (live.json)
+# Notch host contract (live.json + host.json)
 
-Local integration for a native notch UI (the boringNotch fork with the WorkspaceHUD bus). Not part of
-the upstream project.
+Local integration for native notch apps ("notch hosts": the planned promethee-notch app, the
+boringNotch fork with the WorkspaceHUD bus...). Not part of the upstream project. Without a host, the
+companion draws the notch itself (hidden in the notch, springs out on a switch). With a live host,
+it hides its window and the host renders the mascot from `live.json`.
 
-## File
+Folder: `~/.local/state/promethee-companion/` (`$XDG_STATE_HOME/promethee-companion/` if set).
 
-- Path: `~/.local/state/promethee-companion/live.json` (`$XDG_STATE_HOME/promethee-companion/live.json`
-  if `XDG_STATE_HOME` is set).
+| File | Written by | Purpose |
+|---|---|---|
+| `live.json` | the companion | session and mascot state, see the schema below |
+| `host.json` | the notch host | heartbeat: "I draw the notch" |
+
+## host.json (written by the host)
+
+```json
+{ "name": "promethee-notch", "version": 1, "pid": 4242, "updatedAt": 1794611385454 }
+```
+
+- `name`: short id shown in the companion's menu and copied to `live.json` `host`.
+- `version`: the `live.json` contract version the host understands (currently `1`).
+- `pid`: the host process. `updatedAt`: ms epoch; rewrite the file (atomically) at least every 5 s.
+- The host is live while `pid` runs and `updatedAt` is less than 15 s old. Delete the file on quit.
+- The companion checks every 5 s. Built-in fallback for the boringNotch fork: a running process named
+  `Boring Notch` whose bundle `Info.plist` has `WorkspaceHUDBus = true` counts as a live host named
+  `boringnotch`, without a heartbeat.
+
+## live.json (written by the companion)
+
 - Written atomically: a temp file in the same folder, then `rename`. A reader never sees half a file.
 - Written only when the content changes, at most once per second. While a session runs,
   `elapsedSeconds` changes every second, so expect about one write per second; with no session, none.
@@ -14,19 +35,19 @@ the upstream project.
   stops moving and `pid` is gone: treat a file older than ~5 s as stale.
 - Settings in the companion's `config.json` (`~/Library/Application Support/Promethee Companion/`):
   - `"notchExport": false` turns the export off (on by default in this branch).
-  - `"notchHost": "auto" | "electron" | "boringnotch"`. `auto` (default): when a process named
-    `Boring Notch` runs and its bundle's `Info.plist` has `WorkspaceHUDBus = true`, the Electron notch
-    window stays hidden and only this file is written. Checked every 5 s.
+  - `"notchHost": "auto" | "electron" | "host"`. `auto` (default): hand the notch to a live host.
+    `electron`: never hand over. `host`: always hide the window (host named `external` if none is
+    detected). The hand-over only applies to the notch placement, not the bottom-right one.
 
-## Schema (`schema: 1`)
+### Schema (`version: 1`)
 
 | Field | Type | Meaning |
 |---|---|---|
-| `schema` | number | `1`. Bumped on breaking changes. |
-| `host` | `"electron"` \| `"boringnotch"` \| null | Who draws the notch right now. `null` when stopped. |
+| `version` | number | Contract version, `1`. Bumped on breaking changes; new fields can appear without a bump. |
+| `host` | string \| null | Who draws the notch now: `"electron"` (the companion window) or the host's `name`. `null` when stopped. |
 | `state` | `"running"` \| `"paused"` \| `"idle"` \| `"error"` \| `"stopped"` | Session state. `idle` = no session. |
 | `alerting` | bool | True while the "back to your app" alert is on (the angry pop-out). |
-| `mode` | `"idle"` \| `"focus"` \| `"alert"` | What the Electron companion shows. |
+| `mode` | `"idle"` \| `"focus"` \| `"alert"` | Mascot state: idle = sleeping (no session or paused), focus = calm, alert = angry with flames. |
 | `error` | string \| null | Why the DB could not be read (`state: "error"`). |
 | `session` | object \| null | Null unless a session is running or paused. |
 | `session.id` | string | Promethee session id. |

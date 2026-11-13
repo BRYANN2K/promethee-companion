@@ -430,12 +430,12 @@ async function pollDb() {
 
 // Notch export (docs/NOTCH_EXPORT.md): on unless config.json has "notchExport": false
 const exportOn = () => readConfig().notchExport !== false;
-// macOS notch: drawn by this window ('electron') or by the boringNotch fork ('boringnotch', which
-// reads live.json); see lib/notch-host.js. Only the notch placement hands over, never the corner.
-let notchHost = 'electron';
-const externalNotch = () => notchMode() && notchHost === 'boringnotch';
+// macOS notch: drawn by this window, or by a notch host app that reads live.json (promethee-notch,
+// the boringNotch fork...); see lib/notch-host.js. Only the notch placement hands over, never the corner.
+let notchHost = null;   // name of the live host, null = this window draws the notch
+const externalNotch = () => notchMode() && !!notchHost;
 async function refreshNotchHost() {
-  const h = notchMode() ? await notchHostLib.resolveHost(readConfig().notchHost || 'auto') : 'electron';
+  const h = notchMode() && exportOn() ? await notchHostLib.detectHost(liveExport.dir(), readConfig().notchHost || 'auto') : null;
   if (h === notchHost) return;
   notchHost = h;
   if (compWin && !compWin.isDestroyed()) {
@@ -458,7 +458,7 @@ function currentView() {
     idleSeconds = computeIdle({ startedAtMs: live.startedAt, endedAtMs: now, trackedSeconds: live.trackedSeconds, samples: sampler.samples(), callIntervals: live.callIntervals || [] }).idleSeconds;
   }
   const view = computeView({ db: live, fg: foreground.getForeground(), now, idleSeconds, samplerSince: sampler.since() });
-  if (exportOn()) liveExport.update(liveExport.build({ db: live, view, now, host: externalNotch() ? 'boringnotch' : 'electron' }));
+  if (exportOn()) liveExport.update(liveExport.build({ db: live, view, now, host: externalNotch() ? notchHost : 'electron' }));
   return view;
 }
 
@@ -508,7 +508,7 @@ function buildTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate([
     ...(updateInfo ? [{ label: `Update available: v${updateInfo.latest} (open)`, click: () => shell.openExternal(updateInfo.url) }] : []),
     { label: 'Open Card Studio', click: openStudio },
-    ...(externalNotch() ? [{ label: 'Notch drawn by Boring Notch (live.json)', enabled: false }] : []),
+    ...(externalNotch() ? [{ label: `Notch drawn by ${notchHost}`, enabled: false }] : []),
     { type: 'separator' },
     { label: visible ? 'Hide companion' : 'Show companion', click: () => toggleCompanion() },
     { label: 'Size', submenu: [['S', 'Small'], ['M', 'Medium'], ['L', 'Large']].map(([k, l]) => ({
