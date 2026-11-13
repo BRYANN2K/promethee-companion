@@ -35,6 +35,7 @@ const foreground = require('./lib/foreground');
 const macLoginItem = require('./lib/login-item-mac');
 const macNotch = require('./lib/notch-mac');
 const liveExport = require('./lib/live-export');
+const notchHostLib = require('./lib/notch-host');
 
 const IS_MAC = process.platform === 'darwin';
 
@@ -322,7 +323,7 @@ function createCompanion() {
   if (IS_MAC) compWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   compWin.setIgnoreMouseEvents(true, { forward: true });
   compWin.loadFile(path.join(__dirname, 'companion', 'index.html'));
-  compWin.once('ready-to-show', () => { if (!readConfig().companionHidden) compWin.showInactive(); pushView(true); });
+  compWin.once('ready-to-show', () => { if (!readConfig().companionHidden && !externalNotch()) compWin.showInactive(); pushView(true); });
   compWin.on('closed', () => { compWin = null; });
 }
 
@@ -429,6 +430,20 @@ async function pollDb() {
 
 // Notch export (docs/NOTCH_EXPORT.md): on unless config.json has "notchExport": false
 const exportOn = () => readConfig().notchExport !== false;
+// macOS notch: drawn by this window ('electron') or by the boringNotch fork ('boringnotch', which
+// reads live.json); see lib/notch-host.js. Only the notch placement hands over, never the corner.
+let notchHost = 'electron';
+const externalNotch = () => notchMode() && notchHost === 'boringnotch';
+async function refreshNotchHost() {
+  const h = notchMode() ? await notchHostLib.resolveHost(readConfig().notchHost || 'auto') : 'electron';
+  if (h === notchHost) return;
+  notchHost = h;
+  if (compWin && !compWin.isDestroyed()) {
+    if (externalNotch()) compWin.hide();
+    else if (!readConfig().companionHidden) compWin.showInactive();
+  }
+  if (tray) buildTrayMenu();
+}
 
 function currentView() {
   const now = Date.now();
@@ -443,7 +458,7 @@ function currentView() {
     idleSeconds = computeIdle({ startedAtMs: live.startedAt, endedAtMs: now, trackedSeconds: live.trackedSeconds, samples: sampler.samples(), callIntervals: live.callIntervals || [] }).idleSeconds;
   }
   const view = computeView({ db: live, fg: foreground.getForeground(), now, idleSeconds, samplerSince: sampler.since() });
-  if (exportOn()) liveExport.update(liveExport.build({ db: live, view, now }));
+  if (exportOn()) liveExport.update(liveExport.build({ db: live, view, now, host: externalNotch() ? 'boringnotch' : 'electron' }));
   return view;
 }
 
@@ -493,6 +508,7 @@ function buildTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate([
     ...(updateInfo ? [{ label: `Update available: v${updateInfo.latest} (open)`, click: () => shell.openExternal(updateInfo.url) }] : []),
     { label: 'Open Card Studio', click: openStudio },
+    ...(externalNotch() ? [{ label: 'Notch drawn by Boring Notch (live.json)', enabled: false }] : []),
     { type: 'separator' },
     { label: visible ? 'Hide companion' : 'Show companion', click: () => toggleCompanion() },
     { label: 'Size', submenu: [['S', 'Small'], ['M', 'Medium'], ['L', 'Large']].map(([k, l]) => ({
@@ -542,6 +558,7 @@ function boot() {
   // be the user's choice (and macOS announces each new one with a "Background item" notification).
   if (cfg.autoLaunch === undefined && !IS_MAC) setAutoLaunch(true);
 
+  if (IS_MAC) { refreshNotchHost(); setInterval(refreshNotchHost, 5000); }
   pollDb().then(() => pushView(true));
   setInterval(pollDb, 2000);
   setTimeout(snapFr, 20000); setInterval(snapFr, 10 * 60e3);
