@@ -34,6 +34,7 @@ const { computeView } = require('./lib/companion-view');
 const foreground = require('./lib/foreground');
 const macLoginItem = require('./lib/login-item-mac');
 const macNotch = require('./lib/notch-mac');
+const liveExport = require('./lib/live-export');
 
 const IS_MAC = process.platform === 'darwin';
 
@@ -426,6 +427,9 @@ async function pollDb() {
   } finally { reading = false; }
 }
 
+// Notch export (docs/NOTCH_EXPORT.md): on unless config.json has "notchExport": false
+const exportOn = () => readConfig().notchExport !== false;
+
 function currentView() {
   const now = Date.now();
   let live = db;
@@ -438,12 +442,14 @@ function currentView() {
   if (live && live.active) {
     idleSeconds = computeIdle({ startedAtMs: live.startedAt, endedAtMs: now, trackedSeconds: live.trackedSeconds, samples: sampler.samples(), callIntervals: live.callIntervals || [] }).idleSeconds;
   }
-  return computeView({ db: live, fg: foreground.getForeground(), now, idleSeconds, samplerSince: sampler.since() });
+  const view = computeView({ db: live, fg: foreground.getForeground(), now, idleSeconds, samplerSince: sampler.since() });
+  if (exportOn()) liveExport.update(liveExport.build({ db: live, view, now }));
+  return view;
 }
 
 function pushView(force) {
+  const v = currentView();   // also feeds the notch export, even with the companion hidden
   if (!compWin || compWin.isDestroyed()) return;
-  const v = currentView();
   const key = JSON.stringify(v);
   if (!force && key === lastSent) return;
   lastSent = key;
@@ -549,4 +555,4 @@ function boot() {
 
 // the companion lives in the tray: closing Card Studio must not quit the app
 app.on('window-all-closed', () => {});
-app.on('before-quit', () => { foreground.stop(); if (sampler) sampler.stop(); if (worker) worker.terminate(); });
+app.on('before-quit', () => { if (exportOn()) liveExport.stop(); foreground.stop(); if (sampler) sampler.stop(); if (worker) worker.terminate(); });
